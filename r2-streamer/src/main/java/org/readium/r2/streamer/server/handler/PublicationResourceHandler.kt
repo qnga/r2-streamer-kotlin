@@ -46,10 +46,8 @@ class PublicationResourceHandler : RouterNanoHTTPD.DefaultHandler() {
             val fetcher = uriResource!!.initParameter(ServingFetcher::class.java)
 
             val href = getHref(session!!)
-            val link = fetcher.publication.linkWithHref(href)!!
-            val mediaType = link.mediaType ?: MediaType.BINARY
-            val resource = fetcher.get(link)
-            serveResponse(session, resource, mediaType.toString())
+            val resource = fetcher.get(href)
+            serveResponse(session, resource)
         } catch(e: Resource.Error) {
             responseFromFailure(e)
         }
@@ -59,9 +57,10 @@ class PublicationResourceHandler : RouterNanoHTTPD.DefaultHandler() {
         }
     }
 
-    private suspend fun serveResponse(session: IHTTPSession, resource: Resource, mimeType: String): Response {
+    private suspend fun serveResponse(session: IHTTPSession, resource: Resource): Response {
         var response: Response?
         var rangeRequest: String? = session.headers["range"]
+        val mimeType = (resource.link().mediaType ?: MediaType.BINARY).toString()
 
         try {
             // Calculate etag

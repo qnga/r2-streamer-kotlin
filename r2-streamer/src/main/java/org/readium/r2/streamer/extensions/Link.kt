@@ -9,14 +9,14 @@
 
 package org.readium.r2.streamer.extensions
 
-import org.readium.r2.shared.fetcher.Fetcher
 import org.readium.r2.shared.util.File
 import org.readium.r2.shared.publication.Link
 
 
-/** Returns a [File] to the directory containing all [Fetcher] links, if there is such a directory. */
+/** Returns a [File] to the directory containing all links, if there is such a directory. */
 internal fun List<Link>.hrefCommonFirstComponent(): File? =
-    map { with(File(it.href)) { firstComponent } }
-        .distinctBy{ it.file }
+    map { it.href.removePrefix("/").substringBefore("/")  }
+        .distinct()
         .takeIf { it.size == 1 }
         ?.firstOrNull()
+        ?.let { File(it) }

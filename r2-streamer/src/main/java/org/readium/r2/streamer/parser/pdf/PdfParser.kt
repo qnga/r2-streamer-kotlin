@@ -19,7 +19,6 @@ import org.readium.r2.shared.format.Format
 import org.readium.r2.shared.format.MediaType
 import org.readium.r2.shared.publication.*
 import org.readium.r2.shared.publication.services.InMemoryCoverService
-import org.readium.r2.shared.util.Try
 import org.readium.r2.shared.util.logging.WarningLogger
 import org.readium.r2.shared.util.pdf.PdfDocument
 import org.readium.r2.shared.util.pdf.toLinks
@@ -42,47 +41,10 @@ class PdfParser(
         fetcher: Fetcher,
         fallbackTitle: String,
         warnings: WarningLogger?
-    ): Try<PublicationParser.PublicationBuilder, Throwable>? {
+    ): PublicationParser.PublicationBuilder? {
 
         if (file.format() != Format.PDF)
             return null
-
-        return try {
-            Try.success(makeBuilder(file, fetcher, fallbackTitle))
-        } catch (e: Exception) {
-            Try.failure(e)
-        }
-    }
-
-    override fun parse(fileAtPath: String, fallbackTitle: String): PubBox? = runBlocking {
-
-        val file = File(fileAtPath)
-        val baseFetcher = FileFetcher(href = "/${file.name}", file = file.file)
-        val builder = try {
-            makeBuilder(file, baseFetcher, fallbackTitle)
-        } catch (e: Exception) {
-            return@runBlocking null
-        }
-
-        with(builder) {
-            val publication = Publication(
-                manifest = manifest,
-                fetcher = fetcher,
-                servicesBuilder = servicesBuilder
-            )
-
-            val container = PublicationContainer(
-                fetcher = fetcher,
-                path = file.file.canonicalPath,
-                mediaType = MediaType.PDF
-            )
-
-            PubBox(publication, container)
-        }
-    }
-
-    private suspend fun makeBuilder(file: File, fetcher: Fetcher, fallbackTitle:  String)
-            : PublicationParser.PublicationBuilder {
 
         val fileHref = fetcher.links().firstOrNull { it.mediaType == MediaType.PDF }?.href
             ?: throw Exception("Unable to find PDF file.")
@@ -110,4 +72,23 @@ class PdfParser(
         return PublicationParser.PublicationBuilder(manifest, fetcher, servicesBuilder)
     }
 
+    override fun parse(fileAtPath: String, fallbackTitle: String): PubBox? = runBlocking {
+
+        val file = File(fileAtPath)
+        val baseFetcher = FileFetcher(href = "/${file.name}", file = file.file)
+        val builder = try {
+            parse(file, baseFetcher, fallbackTitle)
+        } catch (e: Exception) {
+            return@runBlocking null
+        } ?: return@runBlocking null
+
+        val publication = builder.build()
+        val container = PublicationContainer(
+            publication = publication,
+            path = file.file.canonicalPath,
+            mediaType = MediaType.PDF
+        )
+
+        PubBox(publication, container)
+    }
 }

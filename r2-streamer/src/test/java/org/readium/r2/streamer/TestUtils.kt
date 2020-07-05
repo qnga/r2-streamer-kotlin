@@ -14,7 +14,6 @@ import org.readium.r2.shared.fetcher.Fetcher
 import org.readium.r2.shared.fetcher.Resource
 import org.readium.r2.shared.util.File
 import org.readium.r2.shared.publication.Link
-import org.readium.r2.shared.util.Try
 
 internal fun Resource.readBlocking(range: LongRange? = null) = runBlocking { read(range) }
 
@@ -28,5 +27,5 @@ internal fun Resource.linkBlocking(range: LongRange? = null) = runBlocking { lin
 
 internal fun Fetcher.linkBlocking(href: String) = get(Link(href = href)).linkBlocking()
 
-internal fun PublicationParser.parseBlocking(file: File, fetcher: Fetcher):
-        Try<PublicationParser.PublicationBuilder, Throwable>? = runBlocking { parse(file, fetcher) }
+internal fun PublicationParser.parseBlocking(file: File, fetcher: Fetcher, fallbackTitle: String = "fallbackTitle"):
+        PublicationParser.PublicationBuilder? = runBlocking { parse(file, fetcher, fallbackTitle) }

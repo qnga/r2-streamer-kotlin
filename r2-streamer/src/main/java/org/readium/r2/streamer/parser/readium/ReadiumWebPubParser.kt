@@ -17,12 +17,11 @@ import org.readium.r2.shared.fetcher.Fetcher
 import org.readium.r2.shared.fetcher.TransformingFetcher
 import org.readium.r2.shared.format.Format
 import org.readium.r2.shared.format.MediaType
-import org.readium.r2.shared.normalize
 import org.readium.r2.shared.publication.Manifest
 import org.readium.r2.shared.publication.Publication
 import org.readium.r2.shared.publication.services.PerResourcePositionsService
 import org.readium.r2.shared.util.File
-import org.readium.r2.shared.util.Try
+
 import org.readium.r2.shared.util.logging.WarningLogger
 import org.readium.r2.streamer.PublicationParser
 import org.readium.r2.streamer.container.ContainerError
@@ -32,7 +31,6 @@ import org.readium.r2.streamer.fetcher.LcpDecryptor
 import org.readium.r2.streamer.parser.PubBox
 import org.readium.r2.streamer.toPublicationType
 import java.io.FileNotFoundException
-import java.lang.IllegalStateException
 
 /**
  * Parses any Readium Web Publication package or manifest, e.g. WebPub, Audiobook, DiViNa, LCPDF...
@@ -44,96 +42,30 @@ class ReadiumWebPubParser(private val context: Context) : PublicationParser, org
         fetcher: Fetcher,
         fallbackTitle: String,
         warnings: WarningLogger?
-    ): Try<PublicationParser.PublicationBuilder, Throwable>? {
+    ): PublicationParser.PublicationBuilder? {
 
-        val supportedFormats = with(Format) {
-            listOf(
-                READIUM_AUDIOBOOK,
-                READIUM_AUDIOBOOK_MANIFEST,
-                LCP_PROTECTED_AUDIOBOOK,
-                READIUM_WEBPUB,
-                READIUM_WEBPUB_MANIFEST,
-                DIVINA,
-                DIVINA_MANIFEST,
-                LCP_PROTECTED_PDF
-            )
-        }
-
-        if (file.format() !in supportedFormats)
+        if (file.format()?.mediaType?.isReadiumWebPubProfile in listOf(false, null))
             return null
-
-        return try {
-            Try.success(makeBuilder(file, fetcher))
-        } catch (e: Exception) {
-            Try.failure(e)
-        }
-    }
-
-    override fun parse(fileAtPath: String, fallbackTitle: String): PubBox? = runBlocking {
-
-        val file = File(fileAtPath)
-        val format = file.format() ?: return@runBlocking null
-        var baseFetcher = try {
-            Fetcher.fromFile(file.file)
-        } catch (e: SecurityException) {
-            return@runBlocking null
-        } catch (e: FileNotFoundException) {
-            throw ContainerError.missingFile(fileAtPath)
-        }
-
-        val drm = if (baseFetcher.isProtectedWithLcp()) DRM(DRM.Brand.lcp) else null
-        @Suppress("NAME_SHADOWING")
-        if (drm?.brand == DRM.Brand.lcp) {
-            baseFetcher = TransformingFetcher(baseFetcher, LcpDecryptor(drm)::transform)
-        }
-
-        val builder = try {
-            makeBuilder(file, baseFetcher)
-        } catch (e: Exception) {
-            return@runBlocking null
-        }
-
-        with(builder) {
-            val publication = Publication(
-                manifest = manifest,
-                fetcher = fetcher,
-                servicesBuilder = servicesBuilder
-            ).apply {
-                type = format.toPublicationType()
-            }
-
-
-            val container = PublicationContainer(
-                fetcher = fetcher,
-                path = file.file.canonicalPath,
-                mediaType = format.mediaType,
-                drm = drm
-            ).apply {
-                if (!format.mediaType.isRwpm) {
-                    rootFile.rootFilePath = "manifest.json"
-                }
-            }
-
-            PubBox(publication, container)
-        }
-    }
-
-    private suspend fun makeBuilder(
-        file: File,
-        fetcher: Fetcher
-    ): PublicationParser.PublicationBuilder {
 
         val manifest =
             if (file.format()?.mediaType?.isRwpm == true) {
-                val href = fetcher.links().firstOrNull()?.href ?: error("Empty fetcher.")
-                val manifestJson = fetcher.get(href).readAsString().getOrThrow()
-                Manifest.fromJSON(JSONObject(manifestJson)) { normalize(base = file.originalUrl ?: file.path, href = it) }
+                val manifestLink = fetcher.links().firstOrNull()
+                    ?: error("Empty fetcher.")
+                val manifestJson = fetcher.get(manifestLink)
+                    .readAsString()
+                    .getOrThrow()
+                Manifest.fromJSON(JSONObject(manifestJson))
             } else {
-                val href = "/manifest.json"
-                val manifestJson = fetcher.get(href).readAsString().getOrThrow()
-                 Manifest.fromJSON(JSONObject(manifestJson)) { normalize(base = "/", href = it) }
+                val manifestLink = fetcher.links()
+                    .firstOrNull { it.href == "/manifest.json" }
+                    ?: error("Unable to find a manifest link.")
+                val manifestJson = fetcher.get(manifestLink)
+                    .readAsString()
+                    .getOrThrow()
+                Manifest.fromJSON(JSONObject(manifestJson), packaged = true)
+            }
+                ?: throw Exception("Failed to parse RWPM.")
 
-            } ?: throw Exception("Failed to parse RWPM.")
 
         // Checks the requirements from the LCPDF specification.
         // https://readium.org/lcp-specs/notes/lcp-for-pdf.html
@@ -154,6 +86,46 @@ class ReadiumWebPubParser(private val context: Context) : PublicationParser, org
         val servicesBuilder = Publication.ServicesBuilder(positions = positionsService)
 
         return PublicationParser.PublicationBuilder(manifest, fetcher, servicesBuilder)
+    }
+
+    override fun parse(fileAtPath: String, fallbackTitle: String): PubBox? = runBlocking {
+
+        val file = File(fileAtPath)
+        val format = file.format() ?: return@runBlocking null
+        var baseFetcher = try {
+            Fetcher.fromFile(file.file)
+        } catch (e: SecurityException) {
+            return@runBlocking null
+        } catch (e: FileNotFoundException) {
+            throw ContainerError.missingFile(fileAtPath)
+        }
+
+        val drm = if (baseFetcher.isProtectedWithLcp()) DRM(DRM.Brand.lcp) else null
+        if (drm?.brand == DRM.Brand.lcp) {
+            baseFetcher = TransformingFetcher(baseFetcher, LcpDecryptor(drm)::transform)
+        }
+
+        val builder = try {
+            parse(file, baseFetcher, fallbackTitle)
+        } catch (e: Exception) {
+            return@runBlocking null
+        } ?: return@runBlocking null
+
+        val publication = builder.build()
+            .apply { type = format.toPublicationType() }
+
+        val container = PublicationContainer(
+            publication = publication,
+            path = file.file.canonicalPath,
+            mediaType = format.mediaType,
+            drm = drm
+        ).apply {
+            if (!format.mediaType.isRwpm) {
+                rootFile.rootFilePath = "manifest.json"
+            }
+        }
+
+        PubBox(publication, container)
     }
 }
 
