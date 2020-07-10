@@ -12,6 +12,7 @@ package org.readium.r2.streamer.parser.readium
 import android.content.Context
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
+import org.readium.r2.shared.PdfSupport
 import org.readium.r2.shared.drm.DRM
 import org.readium.r2.shared.fetcher.Fetcher
 import org.readium.r2.shared.fetcher.TransformingFetcher
@@ -23,6 +24,7 @@ import org.readium.r2.shared.publication.services.PerResourcePositionsService
 import org.readium.r2.shared.util.File
 
 import org.readium.r2.shared.util.logging.WarningLogger
+import org.readium.r2.shared.util.pdf.OpenPdfDocument
 import org.readium.r2.streamer.PublicationParser
 import org.readium.r2.streamer.container.ContainerError
 import org.readium.r2.streamer.container.PublicationContainer
@@ -35,7 +37,8 @@ import java.io.FileNotFoundException
 /**
  * Parses any Readium Web Publication package or manifest, e.g. WebPub, Audiobook, DiViNa, LCPDF...
  */
-class ReadiumWebPubParser(private val context: Context) : PublicationParser, org.readium.r2.streamer.parser.PublicationParser {
+@OptIn(PdfSupport::class)
+class ReadiumWebPubParser(private val openPdf: OpenPdfDocument? = null) : PublicationParser, org.readium.r2.streamer.parser.PublicationParser {
 
     override suspend fun parse(
         file: File,
@@ -44,24 +47,24 @@ class ReadiumWebPubParser(private val context: Context) : PublicationParser, org
         warnings: WarningLogger?
     ): PublicationParser.PublicationBuilder? {
 
-        if (file.format()?.mediaType?.isReadiumWebPubProfile in listOf(false, null))
+        if (file.format()?.mediaType?.isReadiumWebPubProfile != true)
             return null
 
         val manifest =
             if (file.format()?.mediaType?.isRwpm == true) {
                 val manifestLink = fetcher.links().firstOrNull()
                     ?: error("Empty fetcher.")
-                val manifestJson = fetcher.get(manifestLink)
-                    .readAsString()
-                    .getOrThrow()
+                val manifestJson = fetcher.get(manifestLink).use {
+                    it.readAsString().getOrThrow()
+                }
                 Manifest.fromJSON(JSONObject(manifestJson))
             } else {
                 val manifestLink = fetcher.links()
                     .firstOrNull { it.href == "/manifest.json" }
                     ?: error("Unable to find a manifest link.")
-                val manifestJson = fetcher.get(manifestLink)
-                    .readAsString()
-                    .getOrThrow()
+                val manifestJson = fetcher.get(manifestLink).use {
+                    it.readAsString().getOrThrow()
+                }
                 Manifest.fromJSON(JSONObject(manifestJson), packaged = true)
             }
                 ?: throw Exception("Failed to parse RWPM.")
@@ -76,7 +79,7 @@ class ReadiumWebPubParser(private val context: Context) : PublicationParser, org
 
         val positionsService = when(file.format()) {
             Format.LCP_PROTECTED_PDF ->
-                LcpdfPositionsService.create(context.applicationContext)
+                openPdf?.let { LcpdfPositionsService.create(it) }
             Format.READIUM_AUDIOBOOK_MANIFEST, Format.READIUM_AUDIOBOOK, Format.LCP_PROTECTED_AUDIOBOOK ->
                 PerResourcePositionsService.createFactory(fallbackMediaType = "audio/*")
             Format.DIVINA_MANIFEST, Format.DIVINA ->
@@ -130,4 +133,4 @@ class ReadiumWebPubParser(private val context: Context) : PublicationParser, org
 }
 
 private suspend fun Fetcher.isProtectedWithLcp(): Boolean =
-    get("license.lcpl").length().isSuccess
+    get("license.lcpl").use { it.length().isSuccess }
